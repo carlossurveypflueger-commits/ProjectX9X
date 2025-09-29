@@ -1,24 +1,14 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import sqlite3
-import json
 import uuid
-import random
-import os
-from typing import Dict, List, Optional
+from typing import Optional, List
 from contextlib import contextmanager
-from dotenv import load_dotenv
-load_dotenv()
+from conversa_ollama import processar_mensagem
+from conversa_ollama import limpar_historico
 
-# Importar Groq
-try:
-    from groq import Groq
-    groq_client = Groq(api_key=os.getenv("GROQ_API_KEY")) if os.getenv("GROQ_API_KEY") else None
-except ImportError:
-    groq_client = None
-
-app = FastAPI(title="AutomationX9X")
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,21 +18,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+NOME_LOJA = "HG Phones"
+NOME_VENDEDOR = "Alex"
+
 class Mensagem(BaseModel):
     texto: str
     origem: str = "web"
-    usuario_id: str = "anonimo"
+    usuario_id: str = "user"
 
 class DadoProduto(BaseModel):
     nome: str
-    categoria: str = ""
+    categoria_id: Optional[str] = None
+    marca_id: Optional[str] = None
     preco: float = 0.0
     descricao: str = ""
+    especificacoes: Optional[str] = None
+    condicao: str = "novo"
     estoque: int = 0
+
+class Categoria(BaseModel):
+    nome: str
+    descricao: Optional[str] = ""
+
+class Marca(BaseModel):
+    nome: str
+    descricao: Optional[str] = ""
 
 class RespostaMensagem(BaseModel):
     sucesso: bool
     mensagem: str
+    transferir_humano: bool = False
 
 @contextmanager
 def get_db():
@@ -53,155 +58,53 @@ def get_db():
     finally:
         conn.close()
 
-def init_database():
+def obter_produtos_completos():
+    """Retorna produtos com categoria, marca e condição"""
     with get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS produtos (
-                id TEXT PRIMARY KEY,
-                nome TEXT NOT NULL,
-                categoria TEXT,
-                preco REAL DEFAULT 0.0,
-                descricao TEXT,
-                estoque INTEGER DEFAULT 0,
-                criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS historico_mensagens (
-                id TEXT PRIMARY KEY,
-                texto TEXT NOT NULL,
-                origem TEXT DEFAULT 'web',
-                usuario_id TEXT DEFAULT 'anonimo',
-                resposta TEXT,
-                processado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.commit()
-
-def processar_mensagem_com_ia(texto: str) -> str:
-    """Processa mensagem usando IA para entender intenção"""
-    
-    print(f"=== DEBUG ===")
-    print(f"Texto recebido: {texto}")
-    
-    # Buscar produtos disponíveis
-    with get_db() as conn:
-        produtos = conn.execute("SELECT nome, categoria, preco, descricao FROM produtos").fetchall()
-    
-    if not produtos:
-        produtos_info = "NENHUM produto cadastrado."
-    else:
-        produtos_info = "PRODUTOS DISPONÍVEIS:\n"
-        for produto in produtos:
-            produtos_info += f"- {produto['nome']} | {produto['categoria']} | R$ {produto['preco']:.2f}\n"
-    
-    if not groq_client:
-        return processar_sem_ia(texto, produtos)
-    
-    try:
-        prompt = f"""Você é um vendedor direto e objetivo. Use APENAS os produtos listados. NÃO invente produtos.
-
-{produtos_info}
-
-Cliente: "{texto}"
-
-REGRAS:
-- Seja BREVE (máximo 50 palavras)
-- Use APENAS produtos da lista
-- NÃO invente produtos
-- Seja direto e útil
-- Se cumprimentar, responda rápido
-- Se perguntar produtos, mostre preços
-
-Resposta curta:"""
-
-        response = groq_client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": "Seja conciso e direto. Máximo 50 palavras. Use apenas informações fornecidas."},
-                {"role": "user", "content": prompt}
-            ],
-            model="llama-3.1-8b-instant",
-            max_tokens=60,  # Bem reduzido
-            temperature=0.2  # Mais conservador
-        )
-        
-        resposta_ia = response.choices[0].message.content.strip()
-        
-        # Se a resposta for muito longa, cortar
-        if len(resposta_ia) > 200:
-            resposta_ia = resposta_ia[:200] + "..."
-        
-        print(f"Resposta da IA: {resposta_ia}")
-        return resposta_ia
-        
-    except Exception as e:
-        print(f"ERRO na IA: {e}")
-        return processar_sem_ia(texto, produtos)
-
-def processar_sem_ia(texto: str, produtos) -> str:
-    """Versão sem IA - respostas curtas"""
-    texto_lower = texto.lower()
-    
-    if any(palavra in texto_lower for palavra in ['oi', 'olá', 'bom dia', 'boa tarde']):
-        return "Olá! Como posso ajudar?"
-    
-    if any(palavra in texto_lower for palavra in ['produto', 'preço', 'quanto', 'valor', 'lista']):
-        if produtos:
-            resposta = "Produtos disponíveis:\n"
-            for produto in produtos:
-                resposta += f"• {produto['nome']} - R$ {produto['preco']:.2f}\n"
-            return resposta
-        else:
-            return "Nenhum produto cadastrado."
-    
-    # Busca específica
-    for produto in produtos:
-        if any(palavra in produto['nome'].lower() for palavra in texto_lower.split() if len(palavra) > 2):
-            return f"{produto['nome']} - R$ {produto['preco']:.2f}\n{produto['categoria']}"
-    
-    return "Como posso ajudar? Digite 'produtos' para ver nossa lista."
-
-def processar_sem_ia(texto: str, produtos) -> str:
-    """Versão sem IA"""
-    texto_lower = texto.lower()
-    
-    if any(palavra in texto_lower for palavra in ['oi', 'olá', 'bom dia', 'boa tarde']):
-        return "Olá! Como posso ajudar você hoje?"
-    
-    if any(palavra in texto_lower for palavra in ['produto', 'preço', 'quanto', 'valor']):
-        if produtos:
-            resposta = "Temos estes produtos:\n\n"
-            for produto in produtos[:3]:
-                resposta += f"{produto['nome']} - R$ {produto['preco']:.2f}\n"
-            return resposta
-        else:
-            return "Ainda não temos produtos cadastrados."
-    
-    return "Como posso ajudar você?"
-
-def processar_mensagem_simples(texto: str) -> str:
-    return processar_mensagem_com_ia(texto)
+        produtos = conn.execute("""
+            SELECT 
+                p.*,
+                c.nome as categoria_nome,
+                m.nome as marca_nome
+            FROM produtos p
+            LEFT JOIN categorias c ON p.categoria_id = c.id
+            LEFT JOIN marcas m ON p.marca_id = m.id
+            WHERE p.ativo = 1
+            ORDER BY p.nome
+        """).fetchall()
+        return [dict(p) for p in produtos]
 
 @app.on_event("startup")
 async def startup():
-    init_database()
+    print(f"🚀 {NOME_LOJA} - Sistema Completo")
 
 @app.get("/")
 async def root():
-    return {"nome": "AutomationX9X", "status": "funcionando"}
+    return {"nome": NOME_LOJA, "status": "funcionando"}
 
 @app.post("/mensagem")
-async def processar_mensagem(mensagem: Mensagem):
+async def processar(mensagem: Mensagem):
     try:
-        print(f"\n=== NOVA MENSAGEM ===")
-        print(f"Texto: {mensagem.texto}")
+        produtos = obter_produtos_completos()
         
-        resposta = processar_mensagem_simples(mensagem.texto)
+        # Detectar intenção de encomenda
+        texto_lower = mensagem.texto.lower()
+        palavras_encomenda = ['encomendar', 'pedir', 'trazer', 'conseguir', 'importar', 'buscar para mim']
+        transferir = any(palavra in texto_lower for palavra in palavras_encomenda)
         
-        print(f"Resposta final: {resposta}")
-        print(f"=== FIM ===\n")
+        resposta = processar_mensagem(
+            mensagem.texto,
+            mensagem.usuario_id,
+            produtos,
+            NOME_LOJA,
+            NOME_VENDEDOR
+        )
         
+        # Se detectou intenção de encomenda
+        if transferir:
+            resposta = "Vou transferir você para um atendente humano que pode ajudar com encomendas especiais!"
+        
+        # Salvar histórico
         with get_db() as conn:
             conn.execute("""
                 INSERT INTO historico_mensagens (id, texto, origem, usuario_id, resposta)
@@ -209,71 +112,105 @@ async def processar_mensagem(mensagem: Mensagem):
             """, (str(uuid.uuid4()), mensagem.texto, mensagem.origem, mensagem.usuario_id, resposta))
             conn.commit()
         
-        return RespostaMensagem(sucesso=True, mensagem=resposta)
+        return RespostaMensagem(sucesso=True, mensagem=resposta, transferir_humano=transferir)
     except Exception as e:
-        print(f"ERRO GERAL: {e}")
-        return RespostaMensagem(sucesso=False, mensagem="Erro ao processar mensagem")
+        print(f"Erro: {e}")
+        return RespostaMensagem(sucesso=False, mensagem="Ops! Tenta de novo?")
 
+# ROTAS DE CATEGORIAS
+@app.get("/categorias")
+async def listar_categorias():
+    with get_db() as conn:
+        return [dict(c) for c in conn.execute("SELECT * FROM categorias ORDER BY nome").fetchall()]
+
+@app.post("/categorias")
+async def criar_categoria(categoria: Categoria):
+    cat_id = str(uuid.uuid4())
+    with get_db() as conn:
+        conn.execute("INSERT INTO categorias (id, nome, descricao) VALUES (?, ?, ?)",
+                    (cat_id, categoria.nome, categoria.descricao))
+        conn.commit()
+    return {"id": cat_id, "mensagem": "Categoria criada!"}
+
+# ROTAS DE MARCAS
+@app.get("/marcas")
+async def listar_marcas():
+    with get_db() as conn:
+        return [dict(m) for m in conn.execute("SELECT * FROM marcas ORDER BY nome").fetchall()]
+
+@app.post("/marcas")
+async def criar_marca(marca: Marca):
+    marca_id = str(uuid.uuid4())
+    with get_db() as conn:
+        conn.execute("INSERT INTO marcas (id, nome, descricao) VALUES (?, ?, ?)",
+                    (marca_id, marca.nome, marca.descricao))
+        conn.commit()
+    return {"id": marca_id, "mensagem": "Marca criada!"}
+
+# ROTAS DE PRODUTOS
 @app.get("/dados/produtos")
 async def listar_produtos():
-    with get_db() as conn:
-        produtos = conn.execute("SELECT * FROM produtos ORDER BY nome").fetchall()
-        return [dict(produto) for produto in produtos]
-
-@app.post("/dados/produtos")
-async def criar_produto(produto: DadoProduto):
-    produto_id = str(uuid.uuid4())
-    
-    with get_db() as conn:
-        conn.execute("""
-            INSERT INTO produtos (id, nome, categoria, preco, descricao, estoque)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (produto_id, produto.nome, produto.categoria, produto.preco, produto.descricao, produto.estoque))
-        conn.commit()
-    
-    return {"id": produto_id, "mensagem": "Produto criado com sucesso"}
+    return obter_produtos_completos()
 
 @app.get("/dados/produtos/{produto_id}")
 async def obter_produto(produto_id: str):
     with get_db() as conn:
-        produto = conn.execute("SELECT * FROM produtos WHERE id = ?", (produto_id,)).fetchone()
+        produto = conn.execute("""
+            SELECT 
+                p.*,
+                c.nome as categoria_nome,
+                m.nome as marca_nome
+            FROM produtos p
+            LEFT JOIN categorias c ON p.categoria_id = c.id
+            LEFT JOIN marcas m ON p.marca_id = m.id
+            WHERE p.id = ?
+        """, (produto_id,)).fetchone()
         if not produto:
-            raise HTTPException(status_code=404, detail="Produto não encontrado")
+            return {"erro": "Produto não encontrado"}
         return dict(produto)
+
+@app.post("/dados/produtos")
+async def criar_produto(produto: DadoProduto):
+    produto_id = str(uuid.uuid4())
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO produtos 
+            (id, nome, categoria_id, marca_id, preco, descricao, especificacoes, condicao, estoque)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (produto_id, produto.nome, produto.categoria_id, produto.marca_id, 
+              produto.preco, produto.descricao, produto.especificacoes, 
+              produto.condicao, produto.estoque))
+        conn.commit()
+    return {"id": produto_id, "mensagem": "Produto criado!"}
 
 @app.put("/dados/produtos/{produto_id}")
 async def atualizar_produto(produto_id: str, produto: DadoProduto):
     with get_db() as conn:
-        result = conn.execute("""
-            UPDATE produtos SET nome = ?, categoria = ?, preco = ?, descricao = ?, estoque = ?
-            WHERE id = ?
-        """, (produto.nome, produto.categoria, produto.preco, produto.descricao, produto.estoque, produto_id))
-        
-        if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Produto não encontrado")
+        conn.execute("""
+            UPDATE produtos 
+            SET nome=?, categoria_id=?, marca_id=?, preco=?, descricao=?, 
+                especificacoes=?, condicao=?, estoque=?
+            WHERE id=?
+        """, (produto.nome, produto.categoria_id, produto.marca_id, produto.preco,
+              produto.descricao, produto.especificacoes, produto.condicao, 
+              produto.estoque, produto_id))
         conn.commit()
-    
-    return {"mensagem": "Produto atualizado com sucesso"}
+    return {"mensagem": "Produto atualizado!"}
 
 @app.delete("/dados/produtos/{produto_id}")
 async def deletar_produto(produto_id: str):
     with get_db() as conn:
-        result = conn.execute("DELETE FROM produtos WHERE id = ?", (produto_id,))
-        if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Produto não encontrado")
+        # Soft delete
+        conn.execute("UPDATE produtos SET ativo=0 WHERE id=?", (produto_id,))
         conn.commit()
-    
-    return {"mensagem": "Produto deletado com sucesso"}
+    return {"mensagem": "Produto removido!"}
 
 @app.get("/historico")
 async def obter_historico(limite: int = 50):
     with get_db() as conn:
-        historico = conn.execute("""
-            SELECT * FROM historico_mensagens 
-            ORDER BY processado_em DESC 
-            LIMIT ?
-        """, (limite,)).fetchall()
-        return [dict(item) for item in historico]
+        return [dict(h) for h in conn.execute(
+            "SELECT * FROM historico_mensagens ORDER BY processado_em DESC LIMIT ?", 
+            (limite,)).fetchall()]
 
 if __name__ == "__main__":
     import uvicorn
