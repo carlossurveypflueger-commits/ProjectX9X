@@ -21,6 +21,12 @@ function App() {
   const [editandoProduto, setEditandoProduto] = useState(null);
   const [loading, setLoading] = useState(false);
   const [conectado, setConectado] = useState(true);
+  
+  // Estados para autocompletar
+  const [buscaCategoria, setBuscaCategoria] = useState('');
+  const [buscaMarca, setBuscaMarca] = useState('');
+  const [mostrarSugestoesCategoria, setMostrarSugestoesCategoria] = useState(false);
+  const [mostrarSuguestoesMarca, setMostrarSuguestoesMarca] = useState(false);
 
   useEffect(() => {
     const verificarConexao = async () => {
@@ -73,11 +79,17 @@ function App() {
     try {
       const response = await api.post('/mensagem', { texto: msg, origem: 'web', usuario_id: 'user' });
       
+      // Se transferiu humano, apenas registrar silenciosamente
+      if (response.data.transferir_humano) {
+        console.log('🚨 ALERTA: Cliente precisa de atendimento humano!');
+        // Aqui você pode: tocar som, mostrar notificação desktop, enviar webhook, etc.
+      }
+      
+      // Adicionar resposta normal (sem mencionar transferência)
       setChatHistory(prev => [...prev, { 
-        tipo: response.data.transferir_humano ? 'system' : 'bot',
+        tipo: 'bot',
         texto: response.data.mensagem, 
-        timestamp: Date.now(),
-        transferir: response.data.transferir_humano
+        timestamp: Date.now()
       }]);
       setConectado(true);
     } catch (error) {
@@ -114,6 +126,67 @@ function App() {
     }
   };
 
+  // Funções de autocompletar
+  const filtrarCategorias = () => {
+    if (!buscaCategoria) return categorias;
+    return categorias.filter(c => 
+      c.nome.toLowerCase().includes(buscaCategoria.toLowerCase())
+    );
+  };
+
+  const filtrarMarcas = () => {
+    if (!buscaMarca) return marcas;
+    return marcas.filter(m => 
+      m.nome.toLowerCase().includes(buscaMarca.toLowerCase())
+    );
+  };
+
+  const selecionarCategoria = (cat) => {
+    setNovoProduto(prev => ({ ...prev, categoria_id: cat.id }));
+    setBuscaCategoria(cat.nome);
+    setMostrarSugestoesCategoria(false);
+  };
+
+  const selecionarMarca = (marca) => {
+    setNovoProduto(prev => ({ ...prev, marca_id: marca.id }));
+    setBuscaMarca(marca.nome);
+    setMostrarSuguestoesMarca(false);
+  };
+
+  const criarNovaCategoria = async () => {
+    if (!buscaCategoria.trim()) return;
+    
+    const confirmacao = window.confirm(`Criar nova categoria "${buscaCategoria}"?`);
+    if (!confirmacao) return;
+    
+    try {
+      const response = await api.post('/categorias', { nome: buscaCategoria, descricao: '' });
+      await carregarCategorias();
+      setNovoProduto(prev => ({ ...prev, categoria_id: response.data.id }));
+      setMostrarSugestoesCategoria(false);
+      alert('✅ Categoria criada com sucesso!');
+    } catch (error) {
+      alert('❌ Erro ao criar categoria');
+    }
+  };
+
+  const criarNovaMarca = async () => {
+    if (!buscaMarca.trim()) return;
+    
+    const confirmacao = window.confirm(`Criar nova marca "${buscaMarca}"?`);
+    if (!confirmacao) return;
+    
+    try {
+      const response = await api.post('/marcas', { nome: buscaMarca, descricao: '' });
+      await carregarMarcas();
+      setNovoProduto(prev => ({ ...prev, marca_id: response.data.id }));
+      setMostrarSuguestoesMarca(false);
+      alert('✅ Marca criada com sucesso!');
+    } catch (error) {
+      alert('❌ Erro ao criar marca');
+    }
+  };
+
   const criarProduto = async () => {
     if (!novoProduto.nome.trim()) {
       alert('Nome é obrigatório');
@@ -131,11 +204,13 @@ function App() {
         nome: '', categoria_id: '', marca_id: '', preco: 0, 
         descricao: '', especificacoes: '', condicao: 'novo', estoque: 0 
       });
+      setBuscaCategoria('');
+      setBuscaMarca('');
       setEditandoProduto(null);
       await carregarProdutos();
-      alert(editandoProduto ? 'Produto atualizado!' : 'Produto criado!');
+      alert(editandoProduto ? '✅ Produto atualizado!' : '✅ Produto criado!');
     } catch (error) {
-      alert('Erro ao salvar produto');
+      alert('❌ Erro ao salvar produto');
     } finally {
       setLoading(false);
     }
@@ -152,6 +227,13 @@ function App() {
       condicao: produto.condicao || 'novo',
       estoque: produto.estoque
     });
+    
+    const cat = categorias.find(c => c.id === produto.categoria_id);
+    const mar = marcas.find(m => m.id === produto.marca_id);
+    
+    setBuscaCategoria(cat ? cat.nome : '');
+    setBuscaMarca(mar ? mar.nome : '');
+    
     setEditandoProduto(produto.id);
   };
 
@@ -162,9 +244,9 @@ function App() {
       setLoading(true);
       await api.delete(`/dados/produtos/${id}`);
       await carregarProdutos();
-      alert('Produto deletado!');
+      alert('✅ Produto deletado!');
     } catch (error) {
-      alert('Erro ao deletar produto');
+      alert('❌ Erro ao deletar produto');
     } finally {
       setLoading(false);
     }
@@ -186,14 +268,14 @@ function App() {
       color: 'white',
       zIndex: 1000
     }}>
-      {conectado ? 'Online' : 'Offline'}
+      {conectado ? '🟢 Online' : '🔴 Offline'}
     </div>
   );
 
   const renderChat = () => (
     <div style={{padding: '20px', maxWidth: '800px', margin: '0 auto'}}>
       <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px'}}>
-        <h2>Chat de Teste</h2>
+        <h2>💬 Chat de Teste</h2>
         <button onClick={limparChat} style={{padding: '8px 16px', backgroundColor: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px'}}>
           Limpar Chat
         </button>
@@ -247,34 +329,206 @@ function App() {
 
   const renderProdutos = () => (
     <div style={{padding: '20px', maxWidth: '1200px', margin: '0 auto'}}>
-      <h2>Gerenciamento de Produtos</h2>
+      <h2>📦 Gerenciamento de Produtos</h2>
       
       {loading && <div style={{textAlign: 'center', padding: '20px', color: '#666'}}>Carregando...</div>}
       
       <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px'}}>
         <div style={{backgroundColor: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'}}>
-          <h3>{editandoProduto ? 'Editar Produto' : 'Novo Produto'}</h3>
+          <h3>{editandoProduto ? '✏️ Editar Produto' : '➕ Novo Produto'}</h3>
           
           <div style={{display: 'flex', flexDirection: 'column', gap: '10px'}}>
-            <input type="text" value={novoProduto.nome} onChange={(e) => setNovoProduto(prev => ({...prev, nome: e.target.value}))} placeholder="Nome do produto *" style={{padding: '10px', border: '1px solid #ddd', borderRadius: '4px'}} />
+            <input 
+              type="text" 
+              value={novoProduto.nome} 
+              onChange={(e) => setNovoProduto(prev => ({...prev, nome: e.target.value}))} 
+              placeholder="Nome do produto *" 
+              style={{padding: '10px', border: '1px solid #ddd', borderRadius: '4px'}} 
+            />
             
-            <select value={novoProduto.categoria_id} onChange={(e) => setNovoProduto(prev => ({...prev, categoria_id: e.target.value}))} style={{padding: '10px', border: '1px solid #ddd', borderRadius: '4px'}}>
-              <option value="">Selecione categoria</option>
-              {categorias.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-            </select>
+            {/* Autocompletar Categoria */}
+            <div style={{position: 'relative'}}>
+              <input 
+                type="text" 
+                value={buscaCategoria} 
+                onChange={(e) => {
+                  setBuscaCategoria(e.target.value);
+                  setMostrarSugestoesCategoria(true);
+                }}
+                onFocus={() => setMostrarSugestoesCategoria(true)}
+                placeholder="🔍 Digite ou selecione categoria" 
+                style={{padding: '10px', border: '1px solid #ddd', borderRadius: '4px', width: '100%'}} 
+              />
+              
+              {mostrarSugestoesCategoria && (
+                <div style={{
+                  position: 'absolute', 
+                  top: '100%', 
+                  left: 0, 
+                  right: 0, 
+                  backgroundColor: 'white', 
+                  border: '1px solid #ddd', 
+                  borderRadius: '4px', 
+                  maxHeight: '200px', 
+                  overflowY: 'auto',
+                  zIndex: 1000,
+                  marginTop: '2px',
+                  boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+                }}>
+                  {filtrarCategorias().length > 0 ? (
+                    filtrarCategorias().map(cat => (
+                      <div 
+                        key={cat.id}
+                        onClick={() => selecionarCategoria(cat)}
+                        style={{
+                          padding: '10px',
+                          cursor: 'pointer',
+                          borderBottom: '1px solid #f0f0f0',
+                          backgroundColor: novoProduto.categoria_id === cat.id ? '#e3f2fd' : 'white'
+                        }}
+                        onMouseEnter={(e) => e.target.style.backgroundColor = '#f5f5f5'}
+                        onMouseLeave={(e) => e.target.style.backgroundColor = novoProduto.categoria_id === cat.id ? '#e3f2fd' : 'white'}
+                      >
+                        📁 {cat.nome}
+                      </div>
+                    ))
+                  ) : (
+                    <div style={{padding: '10px', textAlign: 'center', color: '#666', fontSize: '13px'}}>
+                      Nenhuma categoria encontrada
+                    </div>
+                  )}
+                  
+                  {buscaCategoria && filtrarCategorias().length === 0 && (
+                    <div 
+                      onClick={criarNovaCategoria}
+                      style={{
+                        padding: '12px',
+                        cursor: 'pointer',
+                        backgroundColor: '#e8f5e9',
+                        color: '#2e7d32',
+                        fontWeight: 'bold',
+                        textAlign: 'center',
+                        borderBottom: '1px solid #c8e6c9'
+                      }}
+                      onMouseEnter={(e) => e.target.style.backgroundColor = '#c8e6c9'}
+                      onMouseLeave={(e) => e.target.style.backgroundColor = '#e8f5e9'}
+                    >
+                      ✨ Criar categoria "{buscaCategoria}"
+                    </div>
+                  )}
+                  
+                  <div 
+                    onClick={() => setMostrarSugestoesCategoria(false)}
+                    style={{
+                      padding: '8px',
+                      textAlign: 'center',
+                      fontSize: '12px',
+                      color: '#999',
+                      cursor: 'pointer',
+                      backgroundColor: '#fafafa'
+                    }}
+                  >
+                    ✖ Fechar
+                  </div>
+                </div>
+              )}
+            </div>
             
-            <select value={novoProduto.marca_id} onChange={(e) => setNovoProduto(prev => ({...prev, marca_id: e.target.value}))} style={{padding: '10px', border: '1px solid #ddd', borderRadius: '4px'}}>
-              <option value="">Selecione marca</option>
-              {marcas.map(m => <option key={m.id} value={m.id}>{m.nome}</option>)}
-            </select>
+            {/* Autocompletar Marca */}
+            <div style={{position: 'relative'}}>
+              <input 
+                type="text" 
+                value={buscaMarca} 
+                onChange={(e) => {
+                  setBuscaMarca(e.target.value);
+                  setMostrarSuguestoesMarca(true);
+                }}
+                onFocus={() => setMostrarSuguestoesMarca(true)}
+                placeholder="🔍 Digite ou selecione marca" 
+                style={{padding: '10px', border: '1px solid #ddd', borderRadius: '4px', width: '100%'}} 
+              />
+              
+              {mostrarSuguestoesMarca && (
+                <div style={{
+                  position: 'absolute', 
+                  top: '100%', 
+                  left: 0, 
+                  right: 0, 
+                  backgroundColor: 'white', 
+                  border: '1px solid #ddd', 
+                  borderRadius: '4px', 
+                  maxHeight: '200px', 
+                  overflowY: 'auto',
+                  zIndex: 1000,
+                  marginTop: '2px',
+                  boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+                }}>
+                  {filtrarMarcas().length > 0 ? (
+                    filtrarMarcas().map(marca => (
+                      <div 
+                        key={marca.id}
+                        onClick={() => selecionarMarca(marca)}
+                        style={{
+                          padding: '10px',
+                          cursor: 'pointer',
+                          borderBottom: '1px solid #f0f0f0',
+                          backgroundColor: novoProduto.marca_id === marca.id ? '#e3f2fd' : 'white'
+                        }}
+                        onMouseEnter={(e) => e.target.style.backgroundColor = '#f5f5f5'}
+                        onMouseLeave={(e) => e.target.style.backgroundColor = novoProduto.marca_id === marca.id ? '#e3f2fd' : 'white'}
+                      >
+                        🏷️ {marca.nome}
+                      </div>
+                    ))
+                  ) : (
+                    <div style={{padding: '10px', textAlign: 'center', color: '#666', fontSize: '13px'}}>
+                      Nenhuma marca encontrada
+                    </div>
+                  )}
+                  
+                  {buscaMarca && filtrarMarcas().length === 0 && (
+                    <div 
+                      onClick={criarNovaMarca}
+                      style={{
+                        padding: '12px',
+                        cursor: 'pointer',
+                        backgroundColor: '#e8f5e9',
+                        color: '#2e7d32',
+                        fontWeight: 'bold',
+                        textAlign: 'center',
+                        borderBottom: '1px solid #c8e6c9'
+                      }}
+                      onMouseEnter={(e) => e.target.style.backgroundColor = '#c8e6c9'}
+                      onMouseLeave={(e) => e.target.style.backgroundColor = '#e8f5e9'}
+                    >
+                      ✨ Criar marca "{buscaMarca}"
+                    </div>
+                  )}
+                  
+                  <div 
+                    onClick={() => setMostrarSuguestoesMarca(false)}
+                    style={{
+                      padding: '8px',
+                      textAlign: 'center',
+                      fontSize: '12px',
+                      color: '#999',
+                      cursor: 'pointer',
+                      backgroundColor: '#fafafa'
+                    }}
+                  >
+                    ✖ Fechar
+                  </div>
+                </div>
+              )}
+            </div>
             
             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px'}}>
               <input type="number" step="0.01" value={novoProduto.preco} onChange={(e) => setNovoProduto(prev => ({...prev, preco: parseFloat(e.target.value) || 0}))} placeholder="Preço" style={{padding: '10px', border: '1px solid #ddd', borderRadius: '4px'}} />
               <input type="number" value={novoProduto.estoque} onChange={(e) => setNovoProduto(prev => ({...prev, estoque: parseInt(e.target.value) || 0}))} placeholder="Estoque" style={{padding: '10px', border: '1px solid #ddd', borderRadius: '4px'}} />
               <select value={novoProduto.condicao} onChange={(e) => setNovoProduto(prev => ({...prev, condicao: e.target.value}))} style={{padding: '10px', border: '1px solid #ddd', borderRadius: '4px'}}>
-                <option value="novo">Novo</option>
-                <option value="seminovo">Semi-novo</option>
-                <option value="usado">Usado</option>
+                <option value="novo">🆕 Novo</option>
+                <option value="seminovo">♻️ Semi-novo</option>
+                <option value="usado">📦 Usado</option>
               </select>
             </div>
             
@@ -283,13 +537,18 @@ function App() {
             <textarea value={novoProduto.especificacoes} onChange={(e) => setNovoProduto(prev => ({...prev, especificacoes: e.target.value}))} placeholder="Especificações técnicas" rows="2" style={{padding: '10px', border: '1px solid #ddd', borderRadius: '4px', resize: 'vertical'}} />
             
             <div style={{display: 'flex', gap: '10px'}}>
-              <button onClick={criarProduto} disabled={loading} style={{flex: 1, padding: '12px', backgroundColor: loading ? '#ccc' : '#22c55e', color: 'white', border: 'none', borderRadius: '6px', cursor: loading ? 'not-allowed' : 'pointer'}}>
-                {loading ? 'Salvando...' : (editandoProduto ? 'Atualizar' : 'Criar')}
+              <button onClick={criarProduto} disabled={loading} style={{flex: 1, padding: '12px', backgroundColor: loading ? '#ccc' : '#22c55e', color: 'white', border: 'none', borderRadius: '6px', cursor: loading ? 'not-allowed' : 'pointer', fontWeight: 'bold'}}>
+                {loading ? '⏳ Salvando...' : (editandoProduto ? '✅ Atualizar' : '✨ Criar')}
               </button>
               
               {editandoProduto && (
-                <button onClick={() => { setEditandoProduto(null); setNovoProduto({ nome: '', categoria_id: '', marca_id: '', preco: 0, descricao: '', especificacoes: '', condicao: 'novo', estoque: 0 }); }} style={{padding: '12px 20px', backgroundColor: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer'}}>
-                  Cancelar
+                <button onClick={() => { 
+                  setEditandoProduto(null); 
+                  setNovoProduto({ nome: '', categoria_id: '', marca_id: '', preco: 0, descricao: '', especificacoes: '', condicao: 'novo', estoque: 0 });
+                  setBuscaCategoria('');
+                  setBuscaMarca('');
+                }} style={{padding: '12px 20px', backgroundColor: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer'}}>
+                  ❌ Cancelar
                 </button>
               )}
             </div>
@@ -298,9 +557,9 @@ function App() {
         
         <div style={{backgroundColor: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'}}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px'}}>
-            <h3>Produtos ({produtos.length})</h3>
+            <h3>📋 Produtos ({produtos.length})</h3>
             <button onClick={carregarProdutos} style={{padding: '6px 12px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px'}}>
-              Atualizar
+              🔄 Atualizar
             </button>
           </div>
           
@@ -314,24 +573,26 @@ function App() {
                     <div style={{flex: 1}}>
                       <h4 style={{margin: '0 0 5px 0'}}>{produto.nome}</h4>
                       <div style={{display: 'flex', gap: '8px', marginBottom: '5px'}}>
-                        {produto.marca_nome && <span style={{fontSize: '11px', backgroundColor: '#e5e7eb', padding: '2px 8px', borderRadius: '12px'}}>{produto.marca_nome}</span>}
-                        {produto.categoria_nome && <span style={{fontSize: '11px', backgroundColor: '#dbeafe', padding: '2px 8px', borderRadius: '12px'}}>{produto.categoria_nome}</span>}
-                        <span style={{fontSize: '11px', backgroundColor: produto.condicao === 'novo' ? '#d1fae5' : '#fef3c7', padding: '2px 8px', borderRadius: '12px'}}>{produto.condicao}</span>
+                        {produto.marca_nome && <span style={{fontSize: '11px', backgroundColor: '#e5e7eb', padding: '2px 8px', borderRadius: '12px'}}>🏷️ {produto.marca_nome}</span>}
+                        {produto.categoria_nome && <span style={{fontSize: '11px', backgroundColor: '#dbeafe', padding: '2px 8px', borderRadius: '12px'}}>📁 {produto.categoria_nome}</span>}
+                        <span style={{fontSize: '11px', backgroundColor: produto.condicao === 'novo' ? '#d1fae5' : '#fef3c7', padding: '2px 8px', borderRadius: '12px'}}>
+                          {produto.condicao === 'novo' ? '🆕' : produto.condicao === 'seminovo' ? '♻️' : '📦'} {produto.condicao}
+                        </span>
                       </div>
                       <p style={{margin: '5px 0', fontWeight: 'bold', fontSize: '16px', color: '#22c55e'}}>
-                        R$ {produto.preco.toFixed(2)}
+                        💰 R$ {produto.preco.toFixed(2)}
                       </p>
                       <p style={{margin: '0 0 5px 0', fontSize: '12px'}}>
-                        Estoque: <span style={{fontWeight: 'bold', color: produto.estoque > 0 ? '#22c55e' : '#ef4444'}}>{produto.estoque}</span>
+                        📦 Estoque: <span style={{fontWeight: 'bold', color: produto.estoque > 0 ? '#22c55e' : '#ef4444'}}>{produto.estoque}</span>
                       </p>
                       {produto.descricao && <p style={{margin: '5px 0 0 0', fontSize: '12px', color: '#666', fontStyle: 'italic'}}>{produto.descricao.substring(0, 80)}</p>}
                     </div>
                     <div style={{display: 'flex', gap: '5px', marginLeft: '10px'}}>
                       <button onClick={() => editarProduto(produto)} style={{padding: '5px 10px', fontSize: '12px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer'}}>
-                        Editar
+                        ✏️
                       </button>
                       <button onClick={() => deletarProduto(produto.id)} style={{padding: '5px 10px', fontSize: '12px', backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer'}}>
-                        Deletar
+                        🗑️
                       </button>
                     </div>
                   </div>
@@ -347,9 +608,9 @@ function App() {
   const renderHistorico = () => (
     <div style={{padding: '20px', maxWidth: '1000px', margin: '0 auto'}}>
       <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px'}}>
-        <h2>Histórico de Mensagens</h2>
+        <h2>📊 Histórico de Mensagens</h2>
         <button onClick={carregarHistorico} style={{padding: '8px 16px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px'}}>
-          Atualizar
+          🔄 Atualizar
         </button>
       </div>
       
@@ -359,9 +620,9 @@ function App() {
         <table style={{width: '100%', borderCollapse: 'collapse'}}>
           <thead style={{backgroundColor: '#f9fafb'}}>
             <tr>
-              <th style={{padding: '12px', textAlign: 'left', fontSize: '12px', color: '#666', fontWeight: 'bold'}}>Data/Hora</th>
-              <th style={{padding: '12px', textAlign: 'left', fontSize: '12px', color: '#666', fontWeight: 'bold'}}>Mensagem</th>
-              <th style={{padding: '12px', textAlign: 'left', fontSize: '12px', color: '#666', fontWeight: 'bold'}}>Resposta</th>
+              <th style={{padding: '12px', textAlign: 'left', fontSize: '12px', color: '#666', fontWeight: 'bold'}}>⏰ Data/Hora</th>
+              <th style={{padding: '12px', textAlign: 'left', fontSize: '12px', color: '#666', fontWeight: 'bold'}}>💬 Mensagem</th>
+              <th style={{padding: '12px', textAlign: 'left', fontSize: '12px', color: '#666', fontWeight: 'bold'}}>🤖 Resposta</th>
             </tr>
           </thead>
           <tbody>
@@ -402,7 +663,7 @@ function App() {
       
       <header style={{backgroundColor: 'white', boxShadow: '0 1px 3px rgba(0,0,0,0.1)'}}>
         <div style={{maxWidth: '1200px', margin: '0 auto', padding: '0 24px', height: '64px', display: 'flex', alignItems: 'center'}}>
-          <h1 style={{fontSize: '20px', fontWeight: 'bold', margin: 0, color: '#1f2937'}}>AutomationX9X</h1>
+          <h1 style={{fontSize: '20px', fontWeight: 'bold', margin: 0, color: '#1f2937'}}>🚀 AutomationX9X</h1>
           <span style={{marginLeft: '8px', fontSize: '14px', color: '#666'}}>Sistema de Automação Inteligente</span>
         </div>
       </header>
@@ -410,9 +671,9 @@ function App() {
       <nav style={{backgroundColor: 'white', borderBottom: '1px solid #eee'}}>
         <div style={{maxWidth: '1200px', margin: '0 auto', padding: '0 24px', display: 'flex', gap: '32px'}}>
           {[
-            {key: 'chat', label: 'Chat de Teste'},
-            {key: 'produtos', label: 'Produtos'},
-            {key: 'historico', label: 'Histórico'}
+            {key: 'chat', label: '💬 Chat de Teste'},
+            {key: 'produtos', label: '📦 Produtos'},
+            {key: 'historico', label: '📊 Histórico'}
           ].map(tab => (
             <button
               key={tab.key}

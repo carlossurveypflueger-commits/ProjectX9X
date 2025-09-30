@@ -5,8 +5,9 @@ import sqlite3
 import uuid
 from typing import Optional, List
 from contextlib import contextmanager
-from conversa_ollama import processar_mensagem
-from conversa_ollama import limpar_historico
+
+# Importar APENAS o que existe em conversa_ollama
+from conversa_ollama import processar_mensagem, limpar_historico
 
 app = FastAPI()
 
@@ -76,33 +77,53 @@ def obter_produtos_completos():
 
 @app.on_event("startup")
 async def startup():
-    print(f"🚀 {NOME_LOJA} - Sistema Completo")
+    print(f"🚀 {NOME_LOJA} - Sistema Completo Iniciado")
+    print(f"👤 Vendedor: {NOME_VENDEDOR}")
+    print(f"🌐 Backend: http://localhost:8000")
+    print(f"📚 Docs: http://localhost:8000/docs")
 
 @app.get("/")
 async def root():
-    return {"nome": NOME_LOJA, "status": "funcionando"}
+    return {
+        "nome": NOME_LOJA, 
+        "vendedor": NOME_VENDEDOR,
+        "status": "funcionando",
+        "funcionalidades": [
+            "Chat com IA + Busca Web",
+            "Detecção de encomendas",
+            "Gestão de produtos",
+            "Histórico completo"
+        ]
+    }
 
 @app.post("/mensagem")
 async def processar(mensagem: Mensagem):
     try:
+        # Buscar todos os produtos
         produtos = obter_produtos_completos()
         
-        # Detectar intenção de encomenda
-        texto_lower = mensagem.texto.lower()
-        palavras_encomenda = ['encomendar', 'pedir', 'trazer', 'conseguir', 'importar', 'buscar para mim']
-        transferir = any(palavra in texto_lower for palavra in palavras_encomenda)
-        
-        resposta = processar_mensagem(
-            mensagem.texto,
-            mensagem.usuario_id,
-            produtos,
-            NOME_LOJA,
-            NOME_VENDEDOR
-        )
-        
-        # Se detectou intenção de encomenda
-        if transferir:
-            resposta = "Vou transferir você para um atendente humano que pode ajudar com encomendas especiais!"
+        # Processar com IA (SEMPRE retorna tupla: resposta, transferir)
+        try:
+            resultado = processar_mensagem(
+                mensagem.texto,
+                mensagem.usuario_id,
+                produtos,
+                NOME_LOJA,
+                NOME_VENDEDOR
+            )
+            
+            # Garantir que é tupla
+            if isinstance(resultado, tuple) and len(resultado) == 2:
+                resposta, transferir = resultado
+            else:
+                # Fallback: se não for tupla, considerar como string
+                resposta = str(resultado)
+                transferir = False
+                
+        except ValueError as ve:
+            print(f"⚠️ Erro ao desempacotar resultado: {ve}")
+            resposta = "Ops, tive um problema. Pode repetir?"
+            transferir = False
         
         # Salvar histórico
         with get_db() as conn:
@@ -112,10 +133,30 @@ async def processar(mensagem: Mensagem):
             """, (str(uuid.uuid4()), mensagem.texto, mensagem.origem, mensagem.usuario_id, resposta))
             conn.commit()
         
-        return RespostaMensagem(sucesso=True, mensagem=resposta, transferir_humano=transferir)
+        # Se transferir=True, loggar mas NÃO mostrar ao cliente
+        if transferir:
+            print(f"\n{'='*60}")
+            print(f"🚨 AÇÃO NECESSÁRIA: Cliente {mensagem.usuario_id} quer encomendar!")
+            print(f"   📱 Mensagem: {mensagem.texto}")
+            print(f"   💬 Resposta: {resposta}")
+            print(f"   ⏰ Timestamp: {uuid.uuid4()}")
+            print(f"{'='*60}\n")
+            # Aqui você pode chamar webhook, enviar email, notificar Slack, etc.
+        
+        return RespostaMensagem(
+            sucesso=True, 
+            mensagem=resposta, 
+            transferir_humano=transferir
+        )
+        
     except Exception as e:
-        print(f"Erro: {e}")
-        return RespostaMensagem(sucesso=False, mensagem="Ops! Tenta de novo?")
+        print(f"❌ Erro ao processar mensagem: {e}")
+        import traceback
+        traceback.print_exc()
+        return RespostaMensagem(
+            sucesso=False, 
+            mensagem="Ops! Tive um problema técnico. Pode tentar novamente?"
+        )
 
 # ROTAS DE CATEGORIAS
 @app.get("/categorias")
@@ -211,6 +252,12 @@ async def obter_historico(limite: int = 50):
         return [dict(h) for h in conn.execute(
             "SELECT * FROM historico_mensagens ORDER BY processado_em DESC LIMIT ?", 
             (limite,)).fetchall()]
+
+@app.delete("/historico/{usuario_id}")
+async def limpar_historico_usuario(usuario_id: str):
+    """Limpa histórico de conversa de um usuário"""
+    limpar_historico(usuario_id)
+    return {"mensagem": f"Histórico do usuário {usuario_id} limpo!"}
 
 if __name__ == "__main__":
     import uvicorn
